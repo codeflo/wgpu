@@ -6,17 +6,13 @@ members = [
     "wgpu",
     "wgpu-core",
     "wgpu-hal",
-    "wgpu-info",
     "wgpu-types",
 ]
 exclude = [
     "cts_runner",
     "deno_webgpu",
 ]
-default-members = ["wgpu", "wgpu-hal", "wgpu-info"]
-
-[patch."https://github.com/gfx-rs/naga"]
-#naga = { path = "../naga" }
+default-members = ["wgpu", "wgpu-hal"]
 
 [patch."https://github.com/zakarumych/gpu-descriptor"]
 #gpu-descriptor = { path = "../gpu-descriptor/gpu-descriptor" }
@@ -25,7 +21,6 @@ default-members = ["wgpu", "wgpu-hal", "wgpu-info"]
 #gpu-alloc = { path = "../gpu-alloc/gpu-alloc" }
 
 [patch.crates-io]
-#naga = { path = "../naga" }
 #glow = { path = "../glow" }
 #metal = { path = "../metal-rs" }
 #web-sys = { path = "../wasm-bindgen/crates/web-sys" }

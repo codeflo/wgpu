@@ -1129,65 +1129,6 @@ impl super::Adapter {
             None
         };
 
-        let naga_options = {
-            use naga::back::spv;
-
-            let mut capabilities = vec![
-                spv::Capability::Shader,
-                spv::Capability::Matrix,
-                spv::Capability::Sampled1D,
-                spv::Capability::Image1D,
-                spv::Capability::ImageQuery,
-                spv::Capability::DerivativeControl,
-                spv::Capability::SampledCubeArray,
-                spv::Capability::SampleRateShading,
-                //Note: this is requested always, no matter what the actual
-                // adapter supports. It's not the responsibility of SPV-out
-                // translation to handle the storage support for formats.
-                spv::Capability::StorageImageExtendedFormats,
-                //TODO: fill out the rest
-            ];
-
-            if features.contains(wgt::Features::MULTIVIEW) {
-                capabilities.push(spv::Capability::MultiView);
-            }
-
-            let mut flags = spv::WriterFlags::empty();
-            flags.set(
-                spv::WriterFlags::DEBUG,
-                self.instance.flags.contains(crate::InstanceFlags::DEBUG),
-            );
-            flags.set(
-                spv::WriterFlags::LABEL_VARYINGS,
-                self.phd_capabilities.properties.vendor_id != crate::auxil::db::qualcomm::VENDOR,
-            );
-            flags.set(
-                spv::WriterFlags::FORCE_POINT_SIZE,
-                //Note: we could technically disable this when we are compiling separate entry points,
-                // and we know exactly that the primitive topology is not `PointList`.
-                // But this requires cloning the `spv::Options` struct, which has heap allocations.
-                true, // could check `super::Workarounds::SEPARATE_ENTRY_POINTS`
-            );
-            spv::Options {
-                lang_version: (1, 0),
-                flags,
-                capabilities: Some(capabilities.iter().cloned().collect()),
-                bounds_check_policies: naga::proc::BoundsCheckPolicies {
-                    index: naga::proc::BoundsCheckPolicy::Restrict,
-                    buffer: if self.private_caps.robust_buffer_access {
-                        naga::proc::BoundsCheckPolicy::Unchecked
-                    } else {
-                        naga::proc::BoundsCheckPolicy::Restrict
-                    },
-                    image: if self.private_caps.robust_image_access {
-                        naga::proc::BoundsCheckPolicy::Unchecked
-                    } else {
-                        naga::proc::BoundsCheckPolicy::Restrict
-                    },
-                },
-            }
-        };
-
         log::info!("Private capabilities: {:?}", self.private_caps);
         let raw_queue = {
             profiling::scope!("vkGetDeviceQueue");
@@ -1268,7 +1209,6 @@ impl super::Adapter {
             mem_allocator: Mutex::new(mem_allocator),
             desc_allocator: Mutex::new(desc_allocator),
             valid_ash_memory_types,
-            naga_options,
             #[cfg(feature = "renderdoc")]
             render_doc: Default::default(),
         };

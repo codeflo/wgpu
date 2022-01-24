@@ -6,7 +6,6 @@ use crate::{
     error::ErrorFormatter,
     id,
     track::UseExtendError,
-    validation::{MissingBufferUsageError, MissingTextureUsageError},
 };
 use wgt::{BufferAddress, BufferSize, Color};
 
@@ -83,10 +82,6 @@ pub enum RenderCommandError {
     Buffer(id::BufferId, BufferError),
     #[error("buffer {0:?} is destroyed")]
     DestroyedBuffer(id::BufferId),
-    #[error(transparent)]
-    MissingBufferUsage(#[from] MissingBufferUsageError),
-    #[error(transparent)]
-    MissingTextureUsage(#[from] MissingTextureUsageError),
     #[error(transparent)]
     PushConstants(#[from] PushConstantUploadError),
     #[error("Invalid Viewport parameters")]

@@ -9,7 +9,6 @@ use crate::{
     },
     instance, pipeline, present, resource,
     track::{BufferState, TextureSelector, TextureState, TrackerSet, UsageConflict},
-    validation::{self, check_buffer_usage, check_texture_usage},
     FastHashMap, Label, LabelHelpers as _, LifeGuard, MultiRefCount, Stored, SubmissionIndex,
     DOWNLEVEL_ERROR_MESSAGE,
 };
@@ -1041,50 +1040,10 @@ impl<A: HalApi> Device<A> {
         desc: &pipeline::ShaderModuleDescriptor<'a>,
         source: pipeline::ShaderModuleSource<'a>,
     ) -> Result<pipeline::ShaderModule<A>, pipeline::CreateShaderModuleError> {
-        let (module, source) = match source {
-            pipeline::ShaderModuleSource::Wgsl(code) => {
-                profiling::scope!("naga::wgsl::parse_str");
-                let module = naga::front::wgsl::parse_str(&code).map_err(|inner| {
-                    pipeline::CreateShaderModuleError::Parsing(pipeline::ShaderError {
-                        source: code.to_string(),
-                        label: desc.label.as_ref().map(|l| l.to_string()),
-                        inner,
-                    })
-                })?;
-                (module, code.into_owned())
-            }
-            pipeline::ShaderModuleSource::Naga(module) => (module, String::new()),
+        let hal_shader = match source {
+            pipeline::ShaderModuleSource::SpirV(s) => hal::ShaderInput::SpirV(s),
+            pipeline::ShaderModuleSource::Msl(s) => hal::ShaderInput::Msl(s),
         };
-
-        use naga::valid::Capabilities as Caps;
-        profiling::scope!("naga::validate");
-
-        let mut caps = Caps::empty();
-        caps.set(
-            Caps::PUSH_CONSTANT,
-            self.features.contains(wgt::Features::PUSH_CONSTANTS),
-        );
-        caps.set(
-            Caps::FLOAT64,
-            self.features.contains(wgt::Features::SHADER_FLOAT64),
-        );
-        caps.set(
-            Caps::PRIMITIVE_INDEX,
-            self.features
-                .contains(wgt::Features::SHADER_PRIMITIVE_INDEX),
-        );
-        let info = naga::valid::Validator::new(naga::valid::ValidationFlags::all(), caps)
-            .validate(&module)
-            .map_err(|inner| {
-                pipeline::CreateShaderModuleError::Validation(pipeline::ShaderError {
-                    source,
-                    label: desc.label.as_ref().map(|l| l.to_string()),
-                    inner,
-                })
-            })?;
-        let interface =
-            validation::Interface::new(&module, &info, self.features, self.limits.clone());
-        let hal_shader = hal::ShaderInput::Naga(hal::NagaShader { module, info });
 
         let hal_desc = hal::ShaderModuleDescriptor {
             label: desc.label.borrow_option(),
@@ -1111,7 +1070,6 @@ impl<A: HalApi> Device<A> {
                 value: id::Valid(self_id),
                 ref_count: self.life_guard.add_ref(),
             },
-            interface: Some(interface),
             #[cfg(debug_assertions)]
             label: desc.label.borrow_or_default().to_string(),
         })
@@ -1129,7 +1087,7 @@ impl<A: HalApi> Device<A> {
             label: desc.label.borrow_option(),
             runtime_checks: desc.shader_bound_checks.runtime_checks(),
         };
-        let hal_shader = hal::ShaderInput::SpirV(source);
+        let hal_shader = hal::ShaderInput::SpirV(Cow::Borrowed(source));
         let raw = match unsafe { self.raw.create_shader_module(&hal_desc, hal_shader) } {
             Ok(raw) => raw,
             Err(error) => {
@@ -1151,7 +1109,6 @@ impl<A: HalApi> Device<A> {
                 value: id::Valid(self_id),
                 ref_count: self.life_guard.add_ref(),
             },
-            interface: None,
             #[cfg(debug_assertions)]
             label: desc.label.borrow_or_default().to_string(),
         })
@@ -1179,44 +1136,6 @@ impl<A: HalApi> Device<A> {
             .bind_group_layout_ids
             .iter()
             .map(|&id| &bgl_guard[id].entries)
-            .collect()
-    }
-
-    /// Generate information about late-validated buffer bindings for pipelines.
-    //TODO: should this be combined with `get_introspection_bind_group_layouts` in some way?
-    fn make_late_sized_buffer_groups<'a>(
-        shader_binding_sizes: &FastHashMap<naga::ResourceBinding, wgt::BufferSize>,
-        layout: &binding_model::PipelineLayout<A>,
-        bgl_guard: &'a Storage<binding_model::BindGroupLayout<A>, id::BindGroupLayoutId>,
-    ) -> ArrayVec<pipeline::LateSizedBufferGroup, { hal::MAX_BIND_GROUPS }> {
-        // Given the shader-required binding sizes and the pipeline layout,
-        // return the filtered list of them in the layout order,
-        // removing those with given `min_binding_size`.
-        layout
-            .bind_group_layout_ids
-            .iter()
-            .enumerate()
-            .map(|(group_index, &bgl_id)| pipeline::LateSizedBufferGroup {
-                shader_sizes: bgl_guard[bgl_id]
-                    .entries
-                    .values()
-                    .filter_map(|entry| match entry.ty {
-                        wgt::BindingType::Buffer {
-                            min_binding_size: None,
-                            ..
-                        } => {
-                            let rb = naga::ResourceBinding {
-                                group: group_index as u32,
-                                binding: entry.binding,
-                            };
-                            let shader_size =
-                                shader_binding_sizes.get(&rb).map_or(0, |nz| nz.get());
-                            Some(shader_size)
-                        }
-                        _ => None,
-                    })
-                    .collect(),
-            })
             .collect()
     }
 
@@ -1454,7 +1373,6 @@ impl<A: HalApi> Device<A> {
             .buffers
             .use_extend(storage, bb.buffer_id, (), internal_use)
             .map_err(|_| Error::InvalidBuffer(bb.buffer_id))?;
-        check_buffer_usage(buffer.usage, pub_usage)?;
         let raw_buffer = buffer
             .raw
             .as_ref()
@@ -1542,7 +1460,6 @@ impl<A: HalApi> Device<A> {
                 internal_use,
             )
             .map_err(UsageConflict::from)?;
-        check_texture_usage(texture.desc.usage, pub_usage)?;
 
         used_texture_ranges.push(TextureInitTrackerAction {
             id: view.parent_id.value.0,
@@ -2149,14 +2066,12 @@ impl<A: HalApi> Device<A> {
 
         let mut derived_group_layouts =
             ArrayVec::<binding_model::BindEntryMap, { hal::MAX_BIND_GROUPS }>::new();
-        let mut shader_binding_sizes = FastHashMap::default();
 
-        let io = validation::StageIo::default();
         let (shader_module_guard, _) = hub.shader_modules.read(&mut token);
 
         let shader_module = shader_module_guard
             .get(desc.stage.module)
-            .map_err(|_| validation::StageError::InvalidModule)?;
+            .map_err(|_| pipeline::CreateComputePipelineError::InvalidLayout)?;
 
         {
             let flag = wgt::ShaderStages::COMPUTE;
@@ -2174,16 +2089,6 @@ impl<A: HalApi> Device<A> {
                     None
                 }
             };
-            if let Some(ref interface) = shader_module.interface {
-                let _ = interface.check_stage(
-                    provided_layouts.as_ref().map(|p| p.as_slice()),
-                    &mut derived_group_layouts,
-                    &mut shader_binding_sizes,
-                    &desc.stage.entry_point,
-                    flag,
-                    io,
-                )?;
-            }
         }
 
         let pipeline_layout_id = match desc.layout {
@@ -2199,9 +2104,6 @@ impl<A: HalApi> Device<A> {
         let layout = pipeline_layout_guard
             .get(pipeline_layout_id)
             .map_err(|_| pipeline::CreateComputePipelineError::InvalidLayout)?;
-
-        let late_sized_buffer_groups =
-            Device::make_late_sized_buffer_groups(&shader_binding_sizes, layout, &*bgl_guard);
 
         let pipeline_desc = hal::ComputePipelineDescriptor {
             label: desc.label.borrow_option(),
@@ -2237,7 +2139,6 @@ impl<A: HalApi> Device<A> {
                 value: id::Valid(self_id),
                 ref_count: self.life_guard.add_ref(),
             },
-            late_sized_buffer_groups,
             life_guard: LifeGuard::new(desc.label.borrow_or_default()),
         };
         Ok(pipeline)
@@ -2267,7 +2168,6 @@ impl<A: HalApi> Device<A> {
 
         let mut derived_group_layouts =
             ArrayVec::<binding_model::BindEntryMap, { hal::MAX_BIND_GROUPS }>::new();
-        let mut shader_binding_sizes = FastHashMap::default();
 
         let color_targets = desc
             .fragment
@@ -2284,9 +2184,6 @@ impl<A: HalApi> Device<A> {
             log::info!("Color targets: {:?}", color_targets);
             self.require_downlevel_flags(wgt::DownlevelFlags::INDEPENDENT_BLENDING)?;
         }
-
-        let mut io = validation::StageIo::default();
-        let mut validated_stages = wgt::ShaderStages::empty();
 
         let mut vertex_strides = Vec::with_capacity(desc.vertex.buffers.len());
         let mut vertex_buffers = Vec::with_capacity(desc.vertex.buffers.len());
@@ -2334,11 +2231,6 @@ impl<A: HalApi> Device<A> {
                 {
                     self.require_features(wgt::Features::VERTEX_ATTRIBUTE_64BIT)?;
                 }
-
-                io.insert(
-                    attribute.shader_location,
-                    validation::InterfaceVar::vertex_attribute(attribute.format),
-                );
             }
             total_attributes += vb_state.attributes.len();
         }
@@ -2458,12 +2350,9 @@ impl<A: HalApi> Device<A> {
             let stage = &desc.vertex.stage;
             let flag = wgt::ShaderStages::VERTEX;
 
-            let shader_module = shader_module_guard.get(stage.module).map_err(|_| {
-                pipeline::CreateRenderPipelineError::Stage {
-                    stage: flag,
-                    error: validation::StageError::InvalidModule,
-                }
-            })?;
+            let shader_module = shader_module_guard
+                .get(stage.module)
+                .map_err(|_| pipeline::CreateRenderPipelineError::Stage { stage: flag })?;
 
             let provided_layouts = match desc.layout {
                 Some(pipeline_layout_id) => {
@@ -2478,23 +2367,6 @@ impl<A: HalApi> Device<A> {
                 None => None,
             };
 
-            if let Some(ref interface) = shader_module.interface {
-                io = interface
-                    .check_stage(
-                        provided_layouts.as_ref().map(|p| p.as_slice()),
-                        &mut derived_group_layouts,
-                        &mut shader_binding_sizes,
-                        &stage.entry_point,
-                        flag,
-                        io,
-                    )
-                    .map_err(|error| pipeline::CreateRenderPipelineError::Stage {
-                        stage: flag,
-                        error,
-                    })?;
-                validated_stages |= flag;
-            }
-
             hal::ProgrammableStage {
                 module: &shader_module.raw,
                 entry_point: stage.entry_point.as_ref(),
@@ -2505,13 +2377,9 @@ impl<A: HalApi> Device<A> {
             Some(ref fragment) => {
                 let flag = wgt::ShaderStages::FRAGMENT;
 
-                let shader_module =
-                    shader_module_guard
-                        .get(fragment.stage.module)
-                        .map_err(|_| pipeline::CreateRenderPipelineError::Stage {
-                            stage: flag,
-                            error: validation::StageError::InvalidModule,
-                        })?;
+                let shader_module = shader_module_guard
+                    .get(fragment.stage.module)
+                    .map_err(|_| pipeline::CreateRenderPipelineError::Stage { stage: flag })?;
 
                 let provided_layouts = match desc.layout {
                     Some(pipeline_layout_id) => Some(Device::get_introspection_bind_group_layouts(
@@ -2523,25 +2391,6 @@ impl<A: HalApi> Device<A> {
                     None => None,
                 };
 
-                if validated_stages == wgt::ShaderStages::VERTEX {
-                    if let Some(ref interface) = shader_module.interface {
-                        io = interface
-                            .check_stage(
-                                provided_layouts.as_ref().map(|p| p.as_slice()),
-                                &mut derived_group_layouts,
-                                &mut shader_binding_sizes,
-                                &fragment.stage.entry_point,
-                                flag,
-                                io,
-                            )
-                            .map_err(|error| pipeline::CreateRenderPipelineError::Stage {
-                                stage: flag,
-                                error,
-                            })?;
-                        validated_stages |= flag;
-                    }
-                }
-
                 Some(hal::ProgrammableStage {
                     module: &shader_module.raw,
                     entry_point: fragment.stage.entry_point.as_ref(),
@@ -2550,40 +2399,10 @@ impl<A: HalApi> Device<A> {
             None => None,
         };
 
-        if validated_stages.contains(wgt::ShaderStages::FRAGMENT) {
-            for (i, state) in color_targets.iter().enumerate() {
-                match io.get(&(i as wgt::ShaderLocation)) {
-                    Some(output) => {
-                        validation::check_texture_format(state.format, &output.ty).map_err(
-                            |pipeline| {
-                                pipeline::CreateRenderPipelineError::ColorState(
-                                    i as u8,
-                                    pipeline::ColorStateError::IncompatibleFormat {
-                                        pipeline,
-                                        shader: output.ty,
-                                    },
-                                )
-                            },
-                        )?;
-                    }
-                    None if state.write_mask.is_empty() => {}
-                    None => {
-                        log::warn!("Missing fragment output[{}], expected {:?}", i, state,);
-                        return Err(pipeline::CreateRenderPipelineError::ColorState(
-                            i as u8,
-                            pipeline::ColorStateError::Missing,
-                        ));
-                    }
-                }
-            }
-        }
         let last_stage = match desc.fragment {
             Some(_) => wgt::ShaderStages::FRAGMENT,
             None => wgt::ShaderStages::VERTEX,
         };
-        if desc.layout.is_none() && !validated_stages.contains(last_stage) {
-            return Err(pipeline::ImplicitLayoutError::ReflectionError(last_stage).into());
-        }
 
         let pipeline_layout_id = match desc.layout {
             Some(id) => id,
@@ -2603,9 +2422,6 @@ impl<A: HalApi> Device<A> {
         if desc.multiview.is_some() {
             self.require_features(wgt::Features::MULTIVIEW)?;
         }
-
-        let late_sized_buffer_groups =
-            Device::make_late_sized_buffer_groups(&shader_binding_sizes, layout, &*bgl_guard);
 
         let pipeline_desc = hal::RenderPipelineDescriptor {
             label: desc.label.borrow_option(),
@@ -2630,7 +2446,7 @@ impl<A: HalApi> Device<A> {
                     }
                     hal::PipelineError::EntryPoint(stage) => {
                         pipeline::CreateRenderPipelineError::Internal {
-                            stage: hal::auxil::map_naga_stage(stage),
+                            stage,
                             error: EP_FAILURE.to_string(),
                         }
                     }
@@ -2678,7 +2494,6 @@ impl<A: HalApi> Device<A> {
             flags,
             strip_index_format: desc.primitive.strip_index_format,
             vertex_strides,
-            late_sized_buffer_groups,
             life_guard: LifeGuard::new(desc.label.borrow_or_default()),
         };
         Ok(pipeline)
@@ -3127,7 +2942,6 @@ impl<G: GlobalIdentityHandlerFactory> Global<G> {
         let buffer = buffer_guard
             .get_mut(buffer_id)
             .map_err(|_| resource::BufferAccessError::Invalid)?;
-        check_buffer_usage(buffer.usage, wgt::BufferUsages::MAP_WRITE)?;
         //assert!(buffer isn't used by the GPU);
 
         #[cfg(feature = "trace")]
@@ -3184,7 +2998,6 @@ impl<G: GlobalIdentityHandlerFactory> Global<G> {
         let buffer = buffer_guard
             .get_mut(buffer_id)
             .map_err(|_| resource::BufferAccessError::Invalid)?;
-        check_buffer_usage(buffer.usage, wgt::BufferUsages::MAP_READ)?;
         //assert!(buffer isn't used by the GPU);
 
         let raw_buf = buffer.raw.as_ref().unwrap();
@@ -4014,27 +3827,6 @@ impl<G: GlobalIdentityHandlerFactory> Global<G> {
                 Ok(device) => device,
                 Err(_) => break DeviceError::Invalid.into(),
             };
-            #[cfg(feature = "trace")]
-            if let Some(ref trace) = device.trace {
-                let mut trace = trace.lock();
-                let data = match source {
-                    pipeline::ShaderModuleSource::Wgsl(ref code) => {
-                        trace.make_binary("wgsl", code.as_bytes())
-                    }
-                    pipeline::ShaderModuleSource::Naga(ref module) => {
-                        let string =
-                            ron::ser::to_string_pretty(module, ron::ser::PrettyConfig::default())
-                                .unwrap();
-                        trace.make_binary("ron", string.as_bytes())
-                    }
-                };
-                trace.add(trace::Action::CreateShaderModule {
-                    id: fid.id(),
-                    desc: desc.clone(),
-                    data,
-                });
-            };
-
             let shader = match device.create_shader_module(device_id, desc, source) {
                 Ok(shader) => shader,
                 Err(e) => break e,
@@ -4944,7 +4736,6 @@ impl<G: GlobalIdentityHandlerFactory> Global<G> {
                 .get_mut(buffer_id)
                 .map_err(|_| resource::BufferAccessError::Invalid)?;
 
-            check_buffer_usage(buffer.usage, pub_usage)?;
             buffer.map_state = match buffer.map_state {
                 resource::BufferMapState::Init { .. } | resource::BufferMapState::Active { .. } => {
                     return Err(resource::BufferAccessError::AlreadyMapped);

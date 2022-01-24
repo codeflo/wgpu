@@ -52,11 +52,7 @@ compile_error!("Metal API enabled on non-Apple OS. If your project is not using 
 #[cfg(all(feature = "dx12", not(windows)))]
 compile_error!("DX12 API enabled on non-Windows OS. If your project is not using resolver=\"2\" in Cargo.toml, it should.");
 
-#[cfg(all(feature = "dx12", windows))]
-mod dx12;
 mod empty;
-#[cfg(all(feature = "gles"))]
-mod gles;
 #[cfg(all(feature = "metal"))]
 mod metal;
 #[cfg(feature = "vulkan")]
@@ -64,11 +60,7 @@ mod vulkan;
 
 pub mod auxil;
 pub mod api {
-    #[cfg(feature = "dx12")]
-    pub use super::dx12::Api as Dx12;
     pub use super::empty::Api as Empty;
-    #[cfg(feature = "gles")]
-    pub use super::gles::Api as Gles;
     #[cfg(feature = "metal")]
     pub use super::metal::Api as Metal;
     #[cfg(feature = "vulkan")]
@@ -79,7 +71,7 @@ pub mod api {
 pub use vulkan::UpdateAfterBindTypes;
 
 use std::{
-    borrow::Borrow,
+    borrow::{Borrow, Cow},
     fmt,
     num::{NonZeroU32, NonZeroU8},
     ops::{Range, RangeInclusive},
@@ -122,7 +114,7 @@ pub enum PipelineError {
     #[error("linkage failed for stage {0:?}: {1}")]
     Linkage(wgt::ShaderStages, String),
     #[error("entry point for stage {0:?} is invalid")]
-    EntryPoint(naga::ShaderStage),
+    EntryPoint(wgt::ShaderStages),
     #[error(transparent)]
     Device(#[from] DeviceError),
 }
@@ -890,27 +882,11 @@ pub struct CommandEncoderDescriptor<'a, A: Api> {
     pub queue: &'a A::Queue,
 }
 
-/// Naga shader module.
-pub struct NagaShader {
-    /// Shader module IR.
-    pub module: naga::Module,
-    /// Analysis information of the module.
-    pub info: naga::valid::ModuleInfo,
-}
-
-// Custom implementation avoids the need to generate Debug impl code
-// for the whole Naga module and info.
-impl fmt::Debug for NagaShader {
-    fn fmt(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
-        write!(formatter, "Naga shader")
-    }
-}
-
 /// Shader input.
 #[allow(clippy::large_enum_variant)]
 pub enum ShaderInput<'a> {
-    Naga(NagaShader),
-    SpirV(&'a [u32]),
+    SpirV(Cow<'a, [u32]>),
+    Msl(Cow<'a, str>),
 }
 
 pub struct ShaderModuleDescriptor<'a> {

@@ -11,7 +11,7 @@ use arrayvec::ArrayVec;
 use parking_lot::Mutex;
 use smallvec::SmallVec;
 use std::{
-    borrow::Cow::Borrowed,
+    borrow::Cow::{self, Borrowed},
     error::Error,
     fmt,
     future::{ready, Ready},
@@ -1009,36 +1009,13 @@ impl crate::Context for Context {
             label: desc.label.map(Borrowed),
             shader_bound_checks,
         };
-        let source = match desc.source {
-            #[cfg(feature = "spirv")]
-            ShaderSource::SpirV(ref spv) => {
-                // Parse the given shader code and store its representation.
-                let options = naga::front::spv::Options {
-                    adjust_coordinate_space: false, // we require NDC_Y_UP feature
-                    strict_capabilities: true,
-                    block_ctx_dump_prefix: None,
-                };
-                let parser = naga::front::spv::Parser::new(spv.iter().cloned(), &options);
-                let module = parser.parse().unwrap();
-                wgc::pipeline::ShaderModuleSource::Naga(module)
+        let source = match &desc.source {
+            ShaderSource::SpirV(code) => {
+                wgc::pipeline::ShaderModuleSource::SpirV(Cow::Borrowed(code.as_ref()))
             }
-            #[cfg(feature = "glsl")]
-            ShaderSource::Glsl {
-                ref shader,
-                stage,
-                ref defines,
-            } => {
-                // Parse the given shader code and store its representation.
-                let options = naga::front::glsl::Options {
-                    stage,
-                    defines: defines.clone(),
-                };
-                let mut parser = naga::front::glsl::Parser::default();
-                let module = parser.parse(&options, shader).unwrap();
-
-                wgc::pipeline::ShaderModuleSource::Naga(module)
+            ShaderSource::Msl(code) => {
+                wgc::pipeline::ShaderModuleSource::Msl(Cow::Borrowed(code.as_ref()))
             }
-            ShaderSource::Wgsl(ref code) => wgc::pipeline::ShaderModuleSource::Wgsl(Borrowed(code)),
         };
         let (id, error) = wgc::gfx_select!(
             device.id => global.device_create_shader_module(device.id, &descriptor, source, PhantomData)

@@ -50,7 +50,6 @@ use crate::{
     init_tracker::{BufferInitTrackerAction, MemoryInitKind, TextureInitTrackerAction},
     pipeline::PipelineFlags,
     track::{TrackerSet, UsageConflict},
-    validation::check_buffer_usage,
     Label, LabelHelpers, LifeGuard, Stored,
 };
 use arrayvec::ArrayVec;
@@ -197,10 +196,12 @@ impl RenderBundleEncoder {
 
                     let max_bind_groups = device.limits.max_bind_groups;
                     if (index as u32) >= max_bind_groups {
-                        return Err(RenderCommandError::BindGroupIndexOutOfRange {
-                            index,
-                            max: max_bind_groups,
-                        })
+                        return Err(RenderBundleErrorInner::RenderCommand(
+                            RenderCommandError::BindGroupIndexOutOfRange {
+                                index,
+                                max: max_bind_groups,
+                            },
+                        ))
                         .map_pass_err(scope);
                     }
 
@@ -211,13 +212,19 @@ impl RenderBundleEncoder {
                         .trackers
                         .bind_groups
                         .use_extend(&*bind_group_guard, bind_group_id, (), ())
-                        .map_err(|_| RenderCommandError::InvalidBindGroup(bind_group_id))
+                        .map_err(|_| {
+                            RenderBundleErrorInner::RenderCommand(
+                                RenderCommandError::InvalidBindGroup(bind_group_id),
+                            )
+                        })
                         .map_pass_err(scope)?;
                     if bind_group.dynamic_binding_info.len() != offsets.len() {
-                        return Err(RenderCommandError::InvalidDynamicOffsetCount {
-                            actual: offsets.len(),
-                            expected: bind_group.dynamic_binding_info.len(),
-                        })
+                        return Err(RenderBundleErrorInner::RenderCommand(
+                            RenderCommandError::InvalidDynamicOffsetCount {
+                                actual: offsets.len(),
+                                expected: bind_group.dynamic_binding_info.len(),
+                            },
+                        ))
                         .map_pass_err(scope);
                     }
 
@@ -230,8 +237,10 @@ impl RenderBundleEncoder {
                         let (alignment, limit_name) =
                             buffer_binding_type_alignment(&device.limits, info.binding_type);
                         if offset % alignment as u64 != 0 {
-                            return Err(RenderCommandError::UnalignedBufferOffset(
-                                offset, limit_name, alignment,
+                            return Err(RenderBundleErrorInner::RenderCommand(
+                                RenderCommandError::UnalignedBufferOffset(
+                                    offset, limit_name, alignment,
+                                ),
                             ))
                             .map_pass_err(scope);
                         }
@@ -262,14 +271,20 @@ impl RenderBundleEncoder {
 
                     self.context
                         .check_compatible(&pipeline.pass_context)
-                        .map_err(RenderCommandError::IncompatiblePipelineTargets)
+                        .map_err(|e| {
+                            RenderBundleErrorInner::RenderCommand(
+                                RenderCommandError::IncompatiblePipelineTargets(e),
+                            )
+                        })
                         .map_pass_err(scope)?;
 
                     if pipeline.flags.contains(PipelineFlags::WRITES_DEPTH_STENCIL)
                         && self.is_ds_read_only
                     {
-                        return Err(RenderCommandError::IncompatiblePipelineRods)
-                            .map_pass_err(scope);
+                        return Err(RenderBundleErrorInner::RenderCommand(
+                            RenderCommandError::IncompatiblePipelineRods,
+                        ))
+                        .map_pass_err(scope);
                     }
 
                     let layout = &pipeline_layout_guard[pipeline.layout_id.value];
@@ -298,8 +313,6 @@ impl RenderBundleEncoder {
                         .buffers
                         .use_extend(&*buffer_guard, buffer_id, (), hal::BufferUses::INDEX)
                         .unwrap();
-                    check_buffer_usage(buffer.usage, wgt::BufferUsages::INDEX)
-                        .map_pass_err(scope)?;
 
                     let end = match size {
                         Some(s) => offset + s.get(),
@@ -325,8 +338,6 @@ impl RenderBundleEncoder {
                         .buffers
                         .use_extend(&*buffer_guard, buffer_id, (), hal::BufferUses::VERTEX)
                         .unwrap();
-                    check_buffer_usage(buffer.usage, wgt::BufferUsages::VERTEX)
-                        .map_pass_err(scope)?;
 
                     let end = match size {
                         Some(s) => offset + s.get(),
@@ -352,10 +363,6 @@ impl RenderBundleEncoder {
                         .ok_or(DrawError::MissingPipeline)
                         .map_pass_err(scope)?;
                     let pipeline_layout = &pipeline_layout_guard[pipeline_layout_id];
-
-                    pipeline_layout
-                        .validate_push_constant_ranges(stages, offset, end_offset)
-                        .map_pass_err(scope)?;
 
                     commands.push(command);
                 }
@@ -450,8 +457,6 @@ impl RenderBundleEncoder {
                         .buffers
                         .use_extend(&*buffer_guard, buffer_id, (), hal::BufferUses::INDIRECT)
                         .unwrap();
-                    check_buffer_usage(buffer.usage, wgt::BufferUsages::INDIRECT)
-                        .map_pass_err(scope)?;
 
                     buffer_memory_init_actions.extend(buffer.initialization_status.create_action(
                         buffer_id,
@@ -482,9 +487,11 @@ impl RenderBundleEncoder {
                         .trackers
                         .buffers
                         .use_extend(&*buffer_guard, buffer_id, (), hal::BufferUses::INDIRECT)
-                        .map_err(|err| RenderCommandError::Buffer(buffer_id, err))
-                        .map_pass_err(scope)?;
-                    check_buffer_usage(buffer.usage, wgt::BufferUsages::INDIRECT)
+                        .map_err(|err| {
+                            RenderBundleErrorInner::RenderCommand(RenderCommandError::Buffer(
+                                buffer_id, err,
+                            ))
+                        })
                         .map_pass_err(scope)?;
 
                     buffer_memory_init_actions.extend(buffer.initialization_status.create_action(
@@ -1157,14 +1164,14 @@ pub(super) enum RenderBundleErrorInner {
     MissingDownlevelFlags(#[from] MissingDownlevelFlags),
 }
 
-impl<T> From<T> for RenderBundleErrorInner
-where
-    T: Into<RenderCommandError>,
-{
-    fn from(t: T) -> Self {
-        Self::RenderCommand(t.into())
-    }
-}
+// impl<T> From<T> for RenderBundleErrorInner
+// where
+//     T: Into<RenderCommandError>,
+// {
+//     fn from(t: T) -> Self {
+//         Self::RenderCommand(t.into())
+//     }
+// }
 
 /// Error encountered when finishing recording a render bundle.
 #[derive(Clone, Debug, Error)]

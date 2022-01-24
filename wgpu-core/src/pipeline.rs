@@ -3,7 +3,7 @@ use crate::{
     device::{DeviceError, MissingDownlevelFlags, MissingFeatures, RenderPassContext},
     hub::Resource,
     id::{DeviceId, PipelineLayoutId, ShaderModuleId},
-    validation, Label, LifeGuard, Stored,
+    Label, LifeGuard, Stored,
 };
 use arrayvec::ArrayVec;
 use std::{borrow::Cow, error::Error, fmt, num::NonZeroU32};
@@ -20,8 +20,8 @@ pub(crate) struct LateSizedBufferGroup {
 
 #[allow(clippy::large_enum_variant)]
 pub enum ShaderModuleSource<'a> {
-    Wgsl(Cow<'a, str>),
-    Naga(naga::Module),
+    SpirV(Cow<'a, [u32]>),
+    Msl(Cow<'a, str>),
 }
 
 #[derive(Clone, Debug)]
@@ -37,7 +37,6 @@ pub struct ShaderModuleDescriptor<'a> {
 pub struct ShaderModule<A: hal::Api> {
     pub(crate) raw: A::ShaderModule,
     pub(crate) device_id: Stored<DeviceId>,
-    pub(crate) interface: Option<validation::Interface>,
     #[cfg(debug_assertions)]
     pub(crate) label: String,
 }
@@ -63,44 +62,6 @@ pub struct ShaderError<E> {
     pub label: Option<String>,
     pub inner: E,
 }
-impl fmt::Display for ShaderError<naga::front::wgsl::ParseError> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let label = self.label.as_deref().unwrap_or_default();
-        let string = self.inner.emit_to_string(&self.source);
-        write!(f, "\nShader '{}' parsing {}", label, string)
-    }
-}
-impl fmt::Display for ShaderError<naga::WithSpan<naga::valid::ValidationError>> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        use codespan_reporting::{
-            diagnostic::{Diagnostic, Label},
-            files::SimpleFile,
-            term,
-        };
-
-        let label = self.label.as_deref().unwrap_or_default();
-        let files = SimpleFile::new(label, &self.source);
-        let config = term::Config::default();
-        let mut writer = term::termcolor::Ansi::new(Vec::new());
-
-        let diagnostic = Diagnostic::error().with_labels(
-            self.inner
-                .spans()
-                .map(|&(span, ref desc)| {
-                    Label::primary((), span.to_range().unwrap()).with_message(desc.to_owned())
-                })
-                .collect(),
-        );
-
-        term::emit(&mut writer, &config, &files, &diagnostic).expect("cannot write error");
-
-        write!(
-            f,
-            "\nShader validation {}",
-            String::from_utf8_lossy(&writer.into_inner())
-        )
-    }
-}
 impl<E> Error for ShaderError<E>
 where
     ShaderError<E>: fmt::Display,
@@ -114,14 +75,10 @@ where
 //Note: `Clone` would require `WithSpan: Clone`.
 #[derive(Debug, Error)]
 pub enum CreateShaderModuleError {
-    #[error(transparent)]
-    Parsing(#[from] ShaderError<naga::front::wgsl::ParseError>),
     #[error("Failed to generate the backend-specific code")]
     Generation,
     #[error(transparent)]
     Device(#[from] DeviceError),
-    #[error(transparent)]
-    Validation(#[from] ShaderError<naga::WithSpan<naga::valid::ValidationError>>),
     #[error(transparent)]
     MissingFeatures(#[from] MissingFeatures),
 }
@@ -173,8 +130,6 @@ pub enum CreateComputePipelineError {
     InvalidLayout,
     #[error("unable to derive an implicit layout")]
     Implicit(#[from] ImplicitLayoutError),
-    #[error("error matching shader requirements against the pipeline")]
-    Stage(#[from] validation::StageError),
     #[error("Internal error: {0}")]
     Internal(String),
     #[error(transparent)]
@@ -186,7 +141,6 @@ pub struct ComputePipeline<A: hal::Api> {
     pub(crate) raw: A::ComputePipeline,
     pub(crate) layout_id: Stored<PipelineLayoutId>,
     pub(crate) device_id: Stored<DeviceId>,
-    pub(crate) late_sized_buffer_groups: ArrayVec<LateSizedBufferGroup, { hal::MAX_BIND_GROUPS }>,
     pub(crate) life_guard: LifeGuard,
 }
 
@@ -270,11 +224,6 @@ pub enum ColorStateError {
     FormatNotBlendable(wgt::TextureFormat),
     #[error("format {0:?} does not have a color aspect")]
     FormatNotColor(wgt::TextureFormat),
-    #[error("output format {pipeline} is incompatible with the shader {shader}")]
-    IncompatibleFormat {
-        pipeline: validation::NumericType,
-        shader: validation::NumericType,
-    },
     #[error("blend factors for {0:?} must be `One`")]
     InvalidMinMaxBlendFactors(wgt::BlendComponent),
 }
@@ -331,11 +280,7 @@ pub enum CreateRenderPipelineError {
     #[error(transparent)]
     MissingDownlevelFlags(#[from] MissingDownlevelFlags),
     #[error("error matching {stage:?} shader requirements against the pipeline")]
-    Stage {
-        stage: wgt::ShaderStages,
-        #[source]
-        error: validation::StageError,
-    },
+    Stage { stage: wgt::ShaderStages },
     #[error("Internal error in {stage:?} shader: {error}")]
     Internal {
         stage: wgt::ShaderStages,
@@ -361,7 +306,6 @@ pub struct RenderPipeline<A: hal::Api> {
     pub(crate) flags: PipelineFlags,
     pub(crate) strip_index_format: Option<wgt::IndexFormat>,
     pub(crate) vertex_strides: Vec<(wgt::BufferAddress, wgt::VertexStepMode)>,
-    pub(crate) late_sized_buffer_groups: ArrayVec<LateSizedBufferGroup, { hal::MAX_BIND_GROUPS }>,
     pub(crate) life_guard: LifeGuard,
 }
 

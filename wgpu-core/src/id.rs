@@ -58,9 +58,6 @@ impl<T> Id<T> {
             0 => Backend::Empty,
             1 => Backend::Vulkan,
             2 => Backend::Metal,
-            3 => Backend::Dx12,
-            4 => Backend::Dx11,
-            5 => Backend::Gl,
             _ => unreachable!(),
         }
     }
@@ -164,14 +161,7 @@ pub type QuerySetId = Id<crate::resource::QuerySet<Dummy>>;
 
 #[test]
 fn test_id_backend() {
-    for &b in &[
-        Backend::Empty,
-        Backend::Vulkan,
-        Backend::Metal,
-        Backend::Dx12,
-        Backend::Dx11,
-        Backend::Gl,
-    ] {
+    for &b in &[Backend::Empty, Backend::Vulkan, Backend::Metal] {
         let id: Id<()> = Id::zip(1, 0, b);
         assert_eq!(id.backend(), b);
     }

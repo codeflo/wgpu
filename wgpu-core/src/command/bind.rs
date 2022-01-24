@@ -185,34 +185,11 @@ impl Binder {
         &'a mut self,
         guard: &Storage<PipelineLayout<A>, PipelineLayoutId>,
         new_id: Valid<PipelineLayoutId>,
-        late_sized_buffer_groups: &[LateSizedBufferGroup],
     ) -> (usize, &'a [EntryPayload]) {
         let old_id_opt = self.pipeline_layout_id.replace(new_id);
         let new = &guard[new_id];
 
         let mut bind_range = self.manager.update_expectations(&new.bind_group_layout_ids);
-
-        // Update the buffer binding sizes that are required by shaders.
-        for (payload, late_group) in self.payloads.iter_mut().zip(late_sized_buffer_groups) {
-            payload.late_bindings_effective_count = late_group.shader_sizes.len();
-            for (late_binding, &shader_expect_size) in payload
-                .late_buffer_bindings
-                .iter_mut()
-                .zip(late_group.shader_sizes.iter())
-            {
-                late_binding.shader_expect_size = shader_expect_size;
-            }
-            if late_group.shader_sizes.len() > payload.late_buffer_bindings.len() {
-                for &shader_expect_size in
-                    late_group.shader_sizes[payload.late_buffer_bindings.len()..].iter()
-                {
-                    payload.late_buffer_bindings.push(LateBufferBinding {
-                        shader_expect_size,
-                        bound_size: 0,
-                    });
-                }
-            }
-        }
 
         if let Some(old_id) = old_id_opt {
             let old = &guard[old_id];

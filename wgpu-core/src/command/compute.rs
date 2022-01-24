@@ -16,7 +16,6 @@ use crate::{
     init_tracker::MemoryInitKind,
     resource::{Buffer, Texture},
     track::{StatefulTrackerSubset, TrackerSet, UsageConflict, UseExtendError},
-    validation::{check_buffer_usage, MissingBufferUsageError},
     Label,
 };
 
@@ -156,8 +155,6 @@ pub enum ComputePassErrorInner {
     InvalidBuffer(id::BufferId),
     #[error(transparent)]
     ResourceUsageConflict(#[from] UsageConflict),
-    #[error(transparent)]
-    MissingBufferUsage(#[from] MissingBufferUsageError),
     #[error("cannot pop debug group, because number of pushed debug groups is zero")]
     InvalidPopDebugGroup,
     #[error(transparent)]
@@ -442,7 +439,6 @@ impl<G: GlobalIdentityHandlerFactory> Global<G> {
                         let (start_index, entries) = state.binder.change_pipeline_layout(
                             &*pipeline_layout_guard,
                             pipeline.layout_id.value,
-                            &pipeline.late_sized_buffer_groups,
                         );
                         if !entries.is_empty() {
                             for (i, e) in entries.iter().enumerate() {
@@ -582,8 +578,6 @@ impl<G: GlobalIdentityHandlerFactory> Global<G> {
                         .buffers
                         .use_extend(&*buffer_guard, buffer_id, (), hal::BufferUses::INDIRECT)
                         .map_err(|_| ComputePassErrorInner::InvalidIndirectBuffer(buffer_id))
-                        .map_pass_err(scope)?;
-                    check_buffer_usage(indirect_buffer.usage, wgt::BufferUsages::INDIRECT)
                         .map_pass_err(scope)?;
 
                     let end_offset = offset + mem::size_of::<wgt::DispatchIndirectArgs>() as u64;

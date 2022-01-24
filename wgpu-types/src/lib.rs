@@ -54,14 +54,6 @@ pub enum Backend {
     Vulkan = 1,
     /// Metal API (Apple platforms)
     Metal = 2,
-    /// Direct3D-12 (Windows)
-    Dx12 = 3,
-    /// Direct3D-11 (Windows)
-    Dx11 = 4,
-    /// OpenGL ES-3 (Linux, Android)
-    Gl = 5,
-    /// WebGPU in the browser
-    BrowserWebGpu = 6,
 }
 
 /// Power Preference when choosing a physical adapter.
@@ -90,27 +82,10 @@ bitflags::bitflags! {
         /// Supported on Windows, Linux/Android, and macOS/iOS via Vulkan Portability (with the Vulkan feature enabled)
         const VULKAN = 1 << Backend::Vulkan as u32;
         /// Currently unsupported
-        const GL = 1 << Backend::Gl as u32;
-        /// Supported on macOS/iOS
         const METAL = 1 << Backend::Metal as u32;
-        /// Supported on Windows 10
-        const DX12 = 1 << Backend::Dx12 as u32;
-        /// Supported on Windows 7+
-        const DX11 = 1 << Backend::Dx11 as u32;
-        /// Supported when targeting the web through webassembly
-        const BROWSER_WEBGPU = 1 << Backend::BrowserWebGpu as u32;
-        /// All the apis that wgpu offers first tier of support for.
-        ///
         /// Vulkan + Metal + DX12 + Browser WebGPU
         const PRIMARY = Self::VULKAN.bits
-            | Self::METAL.bits
-            | Self::DX12.bits
-            | Self::BROWSER_WEBGPU.bits;
-        /// All the apis that wgpu offers second tier of support for. These may
-        /// be unsupported/still experimental.
-        ///
-        /// OpenGL + DX11
-        const SECONDARY = Self::GL.bits | Self::DX11.bits;
+            | Self::METAL.bits;
     }
 }
 

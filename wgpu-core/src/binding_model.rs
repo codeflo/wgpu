@@ -5,7 +5,6 @@ use crate::{
     id::{BindGroupLayoutId, BufferId, DeviceId, SamplerId, TextureViewId, Valid},
     init_tracker::{BufferInitTrackerAction, TextureInitTrackerAction},
     track::{TrackerSet, UsageConflict, DUMMY_SELECTOR},
-    validation::{MissingBufferUsageError, MissingTextureUsageError},
     FastHashMap, Label, LifeGuard, MultiRefCount, Stored,
 };
 
@@ -95,10 +94,6 @@ pub enum CreateBindGroupError {
     DuplicateBinding(u32),
     #[error("unable to find a corresponding declaration for the given binding {0}")]
     MissingBindingDeclaration(u32),
-    #[error(transparent)]
-    MissingBufferUsage(#[from] MissingBufferUsageError),
-    #[error(transparent)]
-    MissingTextureUsage(#[from] MissingTextureUsageError),
     #[error("binding declared as a single item, but bind group is using it as an array")]
     SingleBindingExpected,
     #[error("buffer offset {0} does not respect device's requested `{1}` limit {2}")]

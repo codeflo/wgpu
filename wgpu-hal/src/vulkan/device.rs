@@ -620,45 +620,10 @@ impl super::Device {
     fn compile_stage(
         &self,
         stage: &crate::ProgrammableStage<super::Api>,
-        naga_stage: naga::ShaderStage,
+        stage_flags: wgt::ShaderStages,
     ) -> Result<CompiledStage, crate::PipelineError> {
-        let stage_flags = crate::auxil::map_naga_stage(naga_stage);
         let vk_module = match *stage.module {
             super::ShaderModule::Raw(raw) => raw,
-            super::ShaderModule::Intermediate {
-                ref naga_shader,
-                runtime_checks,
-            } => {
-                let pipeline_options = naga::back::spv::PipelineOptions {
-                    entry_point: stage.entry_point.to_string(),
-                    shader_stage: naga_stage,
-                };
-                let temp_options;
-                let options = if !runtime_checks {
-                    temp_options = naga::back::spv::Options {
-                        bounds_check_policies: naga::proc::BoundsCheckPolicies {
-                            index: naga::proc::BoundsCheckPolicy::Unchecked,
-                            buffer: naga::proc::BoundsCheckPolicy::Unchecked,
-                            image: naga::proc::BoundsCheckPolicy::Unchecked,
-                        },
-                        ..self.naga_options.clone()
-                    };
-                    &temp_options
-                } else {
-                    &self.naga_options
-                };
-                let spv = {
-                    profiling::scope!("naga::spv::write_vec");
-                    naga::back::spv::write_vec(
-                        &naga_shader.module,
-                        &naga_shader.info,
-                        options,
-                        Some(&pipeline_options),
-                    )
-                }
-                .map_err(|e| crate::PipelineError::Linkage(stage_flags, format!("{}", e)))?;
-                self.create_shader_module_impl(&spv)?
-            }
         };
 
         let entry_point = CString::new(stage.entry_point).unwrap();
@@ -673,7 +638,6 @@ impl super::Device {
             _entry_point: entry_point,
             temp_raw_module: match *stage.module {
                 super::ShaderModule::Raw(_) => None,
-                super::ShaderModule::Intermediate { .. } => Some(vk_module),
             },
         })
     }
@@ -1311,36 +1275,12 @@ impl crate::Device<super::Api> for super::Device {
         shader: crate::ShaderInput,
     ) -> Result<super::ShaderModule, crate::ShaderError> {
         let spv = match shader {
-            crate::ShaderInput::Naga(naga_shader) => {
-                if self
-                    .shared
-                    .workarounds
-                    .contains(super::Workarounds::SEPARATE_ENTRY_POINTS)
-                {
-                    return Ok(super::ShaderModule::Intermediate {
-                        naga_shader,
-                        runtime_checks: desc.runtime_checks,
-                    });
-                }
-                let mut naga_options = self.naga_options.clone();
-                if !desc.runtime_checks {
-                    naga_options.bounds_check_policies = naga::proc::BoundsCheckPolicies {
-                        index: naga::proc::BoundsCheckPolicy::Unchecked,
-                        buffer: naga::proc::BoundsCheckPolicy::Unchecked,
-                        image: naga::proc::BoundsCheckPolicy::Unchecked,
-                    };
-                }
-                Cow::Owned(
-                    naga::back::spv::write_vec(
-                        &naga_shader.module,
-                        &naga_shader.info,
-                        &naga_options,
-                        None,
-                    )
-                    .map_err(|e| crate::ShaderError::Compilation(format!("{}", e)))?,
-                )
+            crate::ShaderInput::SpirV(spv) => spv,
+            crate::ShaderInput::Msl(_) => {
+                return Err(crate::ShaderError::Compilation(
+                    "Can't load MSL shader into Vulkan".to_owned(),
+                ))
             }
-            crate::ShaderInput::SpirV(spv) => Cow::Borrowed(spv),
         };
 
         let raw = self.create_shader_module_impl(&*spv)?;
@@ -1357,7 +1297,6 @@ impl crate::Device<super::Api> for super::Device {
             super::ShaderModule::Raw(raw) => {
                 let _ = self.shared.raw.destroy_shader_module(raw, None);
             }
-            super::ShaderModule::Intermediate { .. } => {}
         }
     }
 
@@ -1409,11 +1348,11 @@ impl crate::Device<super::Api> for super::Device {
             .primitive_restart_enable(desc.primitive.strip_index_format.is_some())
             .build();
 
-        let compiled_vs = self.compile_stage(&desc.vertex_stage, naga::ShaderStage::Vertex)?;
+        let compiled_vs = self.compile_stage(&desc.vertex_stage, wgt::ShaderStages::VERTEX)?;
         stages.push(compiled_vs.create_info);
         let compiled_fs = match desc.fragment_stage {
             Some(ref stage) => {
-                let compiled = self.compile_stage(stage, naga::ShaderStage::Fragment)?;
+                let compiled = self.compile_stage(stage, wgt::ShaderStages::FRAGMENT)?;
                 stages.push(compiled.create_info);
                 Some(compiled)
             }
@@ -1588,7 +1527,7 @@ impl crate::Device<super::Api> for super::Device {
         &self,
         desc: &crate::ComputePipelineDescriptor<super::Api>,
     ) -> Result<super::ComputePipeline, crate::PipelineError> {
-        let compiled = self.compile_stage(&desc.stage, naga::ShaderStage::Compute)?;
+        let compiled = self.compile_stage(&desc.stage, wgt::ShaderStages::COMPUTE)?;
 
         let vk_infos = [{
             vk::ComputePipelineCreateInfo::builder()

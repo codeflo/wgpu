@@ -19,19 +19,13 @@ use crate::{
     pipeline::PipelineFlags,
     resource::{Texture, TextureView},
     track::{StatefulTrackerSubset, TextureSelector, UsageConflict},
-    validation::{
-        check_buffer_usage, check_texture_usage, MissingBufferUsageError, MissingTextureUsageError,
-    },
     Label, Stored,
 };
 
 use arrayvec::ArrayVec;
 use hal::CommandEncoder as _;
 use thiserror::Error;
-use wgt::{
-    BufferAddress, BufferSize, BufferUsages, Color, IndexFormat, TextureUsages,
-    TextureViewDimension, VertexStepMode,
-};
+use wgt::{BufferAddress, BufferSize, Color, IndexFormat, TextureViewDimension, VertexStepMode};
 
 #[cfg(any(feature = "serial-pass", feature = "replay"))]
 use serde::Deserialize;
@@ -484,18 +478,6 @@ impl PrettyError for RenderPassErrorInner {
     }
 }
 
-impl From<MissingBufferUsageError> for RenderPassErrorInner {
-    fn from(error: MissingBufferUsageError) -> Self {
-        Self::RenderCommand(error.into())
-    }
-}
-
-impl From<MissingTextureUsageError> for RenderPassErrorInner {
-    fn from(error: MissingTextureUsageError) -> Self {
-        Self::RenderCommand(error.into())
-    }
-}
-
 /// Error encountered when performing a render pass.
 #[derive(Clone, Debug, Error)]
 #[error("{scope}")]
@@ -927,7 +909,6 @@ impl<'a, A: HalApi> RenderPassInfo<'a, A> {
                 return Err(RenderPassErrorInner::SurfaceTextureDropped);
             }
             let texture = &texture_guard[ra.texture_id.value];
-            check_texture_usage(texture.desc.usage, TextureUsages::RENDER_ATTACHMENT)?;
 
             // the tracker set of the pass is always in "extend" mode
             self.trackers
@@ -1209,7 +1190,6 @@ impl<G: GlobalIdentityHandlerFactory> Global<G> {
                             let (start_index, entries) = state.binder.change_pipeline_layout(
                                 &*pipeline_layout_guard,
                                 pipeline.layout_id.value,
-                                &pipeline.late_sized_buffer_groups,
                             );
                             if !entries.is_empty() {
                                 for (i, e) in entries.iter().enumerate() {
@@ -1284,8 +1264,6 @@ impl<G: GlobalIdentityHandlerFactory> Global<G> {
                             .use_extend(&*buffer_guard, buffer_id, (), hal::BufferUses::INDEX)
                             .map_err(|e| RenderCommandError::Buffer(buffer_id, e))
                             .map_pass_err(scope)?;
-                        check_buffer_usage(buffer.usage, BufferUsages::INDEX)
-                            .map_pass_err(scope)?;
                         let buf_raw = buffer
                             .raw
                             .as_ref()
@@ -1330,8 +1308,6 @@ impl<G: GlobalIdentityHandlerFactory> Global<G> {
                             .buffers
                             .use_extend(&*buffer_guard, buffer_id, (), hal::BufferUses::VERTEX)
                             .map_err(|e| RenderCommandError::Buffer(buffer_id, e))
-                            .map_pass_err(scope)?;
-                        check_buffer_usage(buffer.usage, BufferUsages::VERTEX)
                             .map_pass_err(scope)?;
                         let buf_raw = buffer
                             .raw
@@ -1589,8 +1565,6 @@ impl<G: GlobalIdentityHandlerFactory> Global<G> {
                             .use_extend(&*buffer_guard, buffer_id, (), hal::BufferUses::INDIRECT)
                             .map_err(|e| RenderCommandError::Buffer(buffer_id, e))
                             .map_pass_err(scope)?;
-                        check_buffer_usage(indirect_buffer.usage, BufferUsages::INDIRECT)
-                            .map_pass_err(scope)?;
                         let indirect_raw = indirect_buffer
                             .raw
                             .as_ref()
@@ -1660,8 +1634,6 @@ impl<G: GlobalIdentityHandlerFactory> Global<G> {
                             .use_extend(&*buffer_guard, buffer_id, (), hal::BufferUses::INDIRECT)
                             .map_err(|e| RenderCommandError::Buffer(buffer_id, e))
                             .map_pass_err(scope)?;
-                        check_buffer_usage(indirect_buffer.usage, BufferUsages::INDIRECT)
-                            .map_pass_err(scope)?;
                         let indirect_raw = indirect_buffer
                             .raw
                             .as_ref()
@@ -1678,8 +1650,6 @@ impl<G: GlobalIdentityHandlerFactory> Global<G> {
                                 hal::BufferUses::INDIRECT,
                             )
                             .map_err(|e| RenderCommandError::Buffer(count_buffer_id, e))
-                            .map_pass_err(scope)?;
-                        check_buffer_usage(count_buffer.usage, BufferUsages::INDIRECT)
                             .map_pass_err(scope)?;
                         let count_raw = count_buffer
                             .raw

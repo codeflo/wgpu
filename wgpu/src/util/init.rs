@@ -2,24 +2,6 @@ use wgt::{Backends, PowerPreference, RequestAdapterOptions};
 
 use crate::{Adapter, Instance, Surface};
 
-#[cfg(any(not(target_arch = "wasm32"), feature = "wgc"))]
-pub use wgc::instance::parse_backends_from_comma_list;
-/// Always returns WEBGPU on wasm over webgpu.
-#[cfg(all(target_arch = "wasm32", not(feature = "wgc")))]
-pub fn parse_backends_from_comma_list(_string: &str) -> Backends {
-    Backends::BROWSER_WEBGPU
-}
-
-/// Get a set of backend bits from the environment variable WGPU_BACKEND.
-pub fn backend_bits_from_env() -> Option<Backends> {
-    std::env::var("WGPU_BACKEND")
-        .as_deref()
-        .map(str::to_lowercase)
-        .ok()
-        .as_deref()
-        .map(parse_backends_from_comma_list)
-}
-
 /// Get a power preference from the environment variable WGPU_POWER_PREF
 pub fn power_preference_from_env() -> Option<PowerPreference> {
     Some(

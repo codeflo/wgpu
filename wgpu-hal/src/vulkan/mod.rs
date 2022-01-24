@@ -329,7 +329,6 @@ pub struct Device {
     desc_allocator:
         Mutex<gpu_descriptor::DescriptorAllocator<vk::DescriptorPool, vk::DescriptorSet>>,
     valid_ash_memory_types: u32,
-    naga_options: naga::back::spv::Options,
     #[cfg(feature = "renderdoc")]
     render_doc: crate::auxil::renderdoc::RenderDoc,
 }
@@ -458,10 +457,6 @@ pub struct CommandBuffer {
 #[allow(clippy::large_enum_variant)]
 pub enum ShaderModule {
     Raw(vk::ShaderModule),
-    Intermediate {
-        naga_shader: crate::NagaShader,
-        runtime_checks: bool,
-    },
 }
 
 #[derive(Debug)]

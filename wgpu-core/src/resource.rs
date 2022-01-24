@@ -4,7 +4,6 @@ use crate::{
     id::{DeviceId, SurfaceId, TextureId, Valid},
     init_tracker::{BufferInitTracker, TextureInitTracker},
     track::{TextureSelector, DUMMY_SELECTOR},
-    validation::MissingBufferUsageError,
     Label, LifeGuard, RefCount, Stored,
 };
 
@@ -79,8 +78,6 @@ pub enum BufferAccessError {
     Destroyed,
     #[error("buffer is already mapped")]
     AlreadyMapped,
-    #[error(transparent)]
-    MissingBufferUsage(#[from] MissingBufferUsageError),
     #[error("buffer is not mapped")]
     NotMapped,
     #[error(
